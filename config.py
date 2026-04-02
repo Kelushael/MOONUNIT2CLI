@@ -2,9 +2,9 @@
 """
 sovereign-agent/config.py
 Config system with versioned backups and audit logging.
-Read/write ~/.config/sovereign-agent/config.json
+Read/write ~/.moonunit2/config.json
 Every write creates config.json.v1, v2, etc.
-Audit log at ~/.config/sovereign-agent/audit.log
+Audit log at ~/.moonunit2/audit.log
 """
 
 import json
@@ -15,7 +15,7 @@ import shutil
 from pathlib import Path
 from datetime import datetime
 
-CONFIG_DIR = Path.home() / ".config" / "sovereign-agent"
+CONFIG_DIR = Path.home() / ".moonunit2"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 AUDIT_LOG = CONFIG_DIR / "audit.log"
 TOKEN_FILE = Path.home() / ".axis-token"

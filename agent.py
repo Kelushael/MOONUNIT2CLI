@@ -42,7 +42,7 @@ import requests
 # Paths
 # ============================================================
 
-CONFIG_DIR = Path.home() / ".config" / "sovereign-agent"
+CONFIG_DIR = Path.home() / ".moonunit2"
 LOG_PATH = CONFIG_DIR / "log.jsonl"
 COMMANDS_PATH = CONFIG_DIR / "commands.json"
 SPECIALTIES_PATH = CONFIG_DIR / "specialties.json"

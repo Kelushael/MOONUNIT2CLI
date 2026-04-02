@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from datetime import datetime
 
-DB_DIR = Path.home() / ".config" / "sovereign-agent"
+DB_DIR = Path.home() / ".moonunit2"
 DB_PATH = DB_DIR / "context.db"
 DISCARD_LOG = DB_DIR / "discards.jsonl"
 
