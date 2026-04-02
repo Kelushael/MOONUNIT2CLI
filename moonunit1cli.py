@@ -7,6 +7,8 @@ Type the alias. It boots. You're in. That's it.
 
 import sys
 import os
+import time
+import threading
 from pathlib import Path
 
 AGENT_DIR = Path(__file__).parent.resolve()
@@ -18,74 +20,133 @@ import config
 from agent import Agent
 
 
-# ============================================================
-# Boot sequence
-# ============================================================
-
-MODELS_DIR = Path.home() / "models"
+MODELS_DIR   = Path.home() / "models"
 DEFAULT_MODEL = MODELS_DIR / "current.gguf"
 CODER_MODEL  = MODELS_DIR / "coder.gguf"
 
+ORANGE = chat.NEON_ORANGE
+RESET  = chat.RESET
+DIM    = chat.DIM
+BOLD   = chat.BOLD
+
+
+# ============================================================
+# ASCII launch sequence
+# ============================================================
+
+FRAMES = [
+    r"""
+     ___  ___                   _   _       _ _   ___
+    |   \/   |                 | | | |     (_) | |_  |
+    | |\  /| | ___   ___  _ __ | | | |_ __  _| |_  | |
+    | | \/ | |/ _ \ / _ \| '_ \| | | | '_ \| | __| | |
+    | |    | | (_) | (_) | | | | |_| | | | | | |_ _| |
+    |_|    |_|\___/ \___/|_| |_|\___/|_| |_|_|\__|___|
+    """,
+    r"""
+    ╔╦╗╔═╗╔═╗╔╗╔╦ ╦╔╗╔╦╔╦╗╔═╗
+    ║║║║ ║║ ║║║║║ ║║║║║ ║ ╠╣
+    ╩ ╩╚═╝╚═╝╝╚╝╚═╝╝╚╝╩ ╩ ╚═╝
+         SOVEREIGN AGENT
+    """,
+    r"""
+    +-+-+-+-+-+-+-+-+-+
+    |M|O|O|N|U|N|I|T|1|
+    +-+-+-+-+-+-+-+-+-+
+     S O V E R E I G N
+    """,
+]
+
+LOADING_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+
+def _play_launch_sequence(server_ready_event):
+    """Play ASCII art while model loads in background."""
+
+    # Frame 1
+    for line in FRAMES[0].split("\n"):
+        print(f"{ORANGE}{line}{RESET}", flush=True)
+        time.sleep(0.04)
+
+    time.sleep(0.3)
+
+    # Frame 2
+    for line in FRAMES[1].split("\n"):
+        print(f"{BOLD}{ORANGE}{line}{RESET}", flush=True)
+        time.sleep(0.06)
+
+    time.sleep(0.3)
+
+    # Frame 3
+    for line in FRAMES[2].split("\n"):
+        print(f"{ORANGE}{line}{RESET}", flush=True)
+        time.sleep(0.08)
+
+    time.sleep(0.4)
+
+    # Spin while waiting for model
+    spin_i = 0
+    while not server_ready_event.is_set():
+        spinner = LOADING_FRAMES[spin_i % len(LOADING_FRAMES)]
+        print(f"\r  {ORANGE}{spinner}{RESET}  {DIM}loading model...{RESET}", end="", flush=True)
+        spin_i += 1
+        time.sleep(0.1)
+
+    # Clear spinner line
+    print(f"\r  {chat.NEON_GREEN}✓{RESET}  model ready{' ' * 20}", flush=True)
+
+
+# ============================================================
+# Model check
+# ============================================================
 
 def _ensure_model():
-    """Make sure current.gguf exists and points to something real."""
-    MODELS_DIR.mkdir(parents=True, exist_ok=True)
-
-    # If coder.gguf exists and is complete (>1GB), prefer it
     if CODER_MODEL.exists() and CODER_MODEL.stat().st_size > 1_000_000_000:
         if not DEFAULT_MODEL.exists() or DEFAULT_MODEL.resolve() != CODER_MODEL.resolve():
             if DEFAULT_MODEL.is_symlink():
                 DEFAULT_MODEL.unlink()
             DEFAULT_MODEL.symlink_to(CODER_MODEL)
-            chat.system_msg("Model: coder.gguf (Qwen2.5-Coder-7B)")
         return True
-
-    # Check if current.gguf already points to something real
     if DEFAULT_MODEL.exists() and DEFAULT_MODEL.stat().st_size > 100_000_000:
         return True
-
-    # Nothing usable — check if coder.gguf is still downloading
-    if CODER_MODEL.exists():
-        size_mb = CODER_MODEL.stat().st_size / 1_000_000
-        chat.warning(f"  Model still downloading... ({size_mb:.0f} MB so far)")
-        chat.out(chat.muted("  Will use remote until download completes."))
-        return False
-
-    chat.warning("  No local model found. Using remote.")
     return False
 
 
+# ============================================================
+# Boot
+# ============================================================
+
 def boot():
-    """Start everything. Local server first. Remote check second. Then ready."""
+    server_ready = threading.Event()
 
-    chat.blank()
-    chat.box([
-        "  MOONUNIT1  ",
-        "  Sovereign Agent  ",
-    ], color_code=chat.NEON_ORANGE)
-    chat.blank()
-
-    # 1. Ensure model is ready
-    model_ready = _ensure_model()
-
-    # 2. Local model server
+    # Check if already running
     existing = serve.find_existing_server(
         port=config.get("model.port", 8181),
         host=config.get("model.host", "127.0.0.1")
     )
 
     if existing:
-        chat.status_dot("Local model server", ok=True)
-    elif model_ready:
-        chat.system_msg("Starting local model server...")
-        server = serve.ModelServer()
-        ok = server.start(quiet=False)
-        if not ok:
-            chat.warning("  Local server unavailable. Will try remote.")
-    else:
-        chat.status_dot("Local model server", ok=False)
+        server_ready.set()
 
-    # 3. Remote check
+    model_ready = _ensure_model()
+
+    def _start_server():
+        if not existing and model_ready:
+            s = serve.ModelServer()
+            s.start(quiet=True)
+        server_ready.set()
+
+    # Start server in background thread
+    t = threading.Thread(target=_start_server, daemon=True)
+    t.start()
+
+    # Play launch sequence in foreground while server loads
+    _play_launch_sequence(server_ready)
+
+    # Wait for thread to finish (already set by now)
+    t.join(timeout=2)
+
+    # Remote check
     import requests
     remote_url = config.get("remote.url", "https://axismundi.fun/v1/chat/completions")
     try:
@@ -94,12 +155,12 @@ def boot():
     except Exception:
         remote_ok = False
 
-    # Auto-switch to remote if local isn't ready
     if not model_ready and remote_ok:
         config.set_value("agent.use_remote", True, source="boot")
 
+    chat.blank()
+    chat.status_dot("Local model  (Qwen2.5-Coder-7B)", ok=model_ready)
     chat.status_dot(f"Remote ({remote_url.split('/')[2]})", ok=remote_ok)
-
     chat.blank()
 
     return remote_ok
@@ -114,8 +175,6 @@ def teardown():
 # ============================================================
 
 def chat_loop(agent):
-    """Main interactive loop. Clean. Direct."""
-
     chat.out(chat.muted("  /help  /status  /ssh  /remote  /release  /exit"))
     chat.blank()
 
@@ -134,7 +193,6 @@ def chat_loop(agent):
         if not user_input:
             continue
 
-        # Built-in slash commands
         if user_input.lower() in ("/exit", "/quit", "exit", "quit"):
             chat.system_msg("Goodbye.")
             break
@@ -159,10 +217,8 @@ def chat_loop(agent):
 
         elif user_input.lower().startswith("/ssh"):
             rest = user_input[4:].strip()
-            if rest:
-                user_input = f"SSH connect to {rest}"
-            else:
-                user_input = "Connect to the remote server via SSH. You know the domain and the user."
+            user_input = f"SSH connect to {rest}" if rest else \
+                         "Connect to the remote server via SSH. You know the domain and the user."
 
         elif user_input.lower() == "/remote":
             config.set_value("agent.use_remote", True, source="cli")
@@ -178,7 +234,6 @@ def chat_loop(agent):
             rest = user_input[8:].strip()
             user_input = f"Run tests on {rest if rest else 'the current project'}. If all tests pass, publish it to the release hub at markyninox.com. Do not publish if any test fails."
 
-        # Send to agent
         chat.blank()
         response = agent.send(user_input)
         if response:
@@ -195,33 +250,26 @@ def _show_status(agent):
     chat.blank()
     chat.header("Status")
 
-    # Server
     server = serve.ModelServer()
     status = server.get_status()
     chat.label("Local server", "running" if status["healthy"] else "down",
                val_color=chat.NEON_GREEN if status["healthy"] else chat.BRIGHT_RED)
     chat.label("Port", str(status["port"]))
 
-    # Remote
     remote_url = config.get("remote.url", "https://axismundi.fun/v1/chat/completions")
     use_remote = config.get("agent.use_remote", False)
     chat.label("Remote", remote_url.split("/")[2])
     chat.label("Using remote", str(use_remote))
 
-    # Memory
     import memory as mem
-    mc = mem.count()
-    chat.label("Memories", str(mc))
+    chat.label("Memories", str(mem.count()))
 
-    # Context
     import context_engine
     ctx = context_engine.get_active_context()
     chat.label("Active context", f"{ctx['count']} chunks ({ctx['pressure']:.0%} pressure)")
 
-    # Dynamic tools
     import tool_registry
-    tools = tool_registry.list_dynamic_tools()
-    chat.label("Dynamic tools", str(len(tools)))
+    chat.label("Dynamic tools", str(len(tool_registry.list_dynamic_tools())))
 
     chat.blank()
 
@@ -231,13 +279,8 @@ def _show_status(agent):
 # ============================================================
 
 def main():
-    # Boot
     boot()
-
-    # Start agent
     agent = Agent()
-
-    # Chat
     try:
         chat_loop(agent)
     finally:
