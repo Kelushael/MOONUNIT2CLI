@@ -34,7 +34,7 @@ except ImportError as e:
     print(f"⚠️  Import error: {e}")
 
 
-CONFIG_DIR = Path.home() / ".moonunit1"
+CONFIG_DIR = Path.home() / ".moonunit2"
 ORCHESTRATOR_LOG = CONFIG_DIR / "orchestrator.jsonl"
 
 

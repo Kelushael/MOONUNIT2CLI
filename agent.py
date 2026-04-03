@@ -112,7 +112,7 @@ BUILTIN_TOOLS = [
                 "type": "object",
                 "properties": {
                     "key": {"type": "string"},
-                    "value": {"description": "Value to set (string, number, bool, object)"}
+                    "value": {"type": "string", "description": "Value to set (string, number, bool, object)"}
                 },
                 "required": ["key", "value"]
             }
@@ -234,7 +234,7 @@ BUILTIN_TOOLS = [
                 "type": "object",
                 "properties": {
                     "key": {"type": "string"},
-                    "value": {"description": "Value to remember (any type)"}
+                    "value": {"type": "string", "description": "Value to remember (any type)"}
                 },
                 "required": ["key", "value"]
             }

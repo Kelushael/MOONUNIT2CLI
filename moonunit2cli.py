@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-moonunit1cli.py
-MOONUNIT1 — Sovereign AI Agent
+moonunit2cli.py
+MOONUNIT2 — Sovereign AI Agent
 Type the alias. It boots. You're in. That's it.
 """
 
@@ -51,7 +51,7 @@ FRAMES = [
     """,
     r"""
     +-+-+-+-+-+-+-+-+-+
-    |M|O|O|N|U|N|I|T|1|
+    |M|O|O|N|U|N|I|T|2|
     +-+-+-+-+-+-+-+-+-+
      S O V E R E I G N
     """,
@@ -117,37 +117,9 @@ def _ensure_model():
 # ============================================================
 
 def boot():
-    server_ready = threading.Event()
-
-    # Check if already running
-    existing = serve.find_existing_server(
-        port=config.get("model.port", 8181),
-        host=config.get("model.host", "127.0.0.1")
-    )
-
-    if existing:
-        server_ready.set()
-
-    model_ready = _ensure_model()
-
-    def _start_server():
-        if not existing and model_ready:
-            s = serve.ModelServer()
-            s.start(quiet=True)
-        server_ready.set()
-
-    # Start server in background thread
-    t = threading.Thread(target=_start_server, daemon=True)
-    t.start()
-
-    # Play launch sequence in foreground while server loads
-    _play_launch_sequence(server_ready)
-
-    # Wait for thread to finish (already set by now)
-    t.join(timeout=2)
-
-    # Remote check
     import requests
+
+    # Check remote first — it's faster than local on this hardware
     remote_url = config.get("remote.url", "https://axismundi.fun/v1/chat/completions")
     try:
         r = requests.get(remote_url.replace("/v1/chat/completions", "/health"), timeout=5)
@@ -155,12 +127,44 @@ def boot():
     except Exception:
         remote_ok = False
 
-    if not model_ready and remote_ok:
+    model_ready = _ensure_model()
+
+    # Remote preferred. Only start local server if remote is down.
+    server_ready = threading.Event()
+    existing = serve.find_existing_server(
+        port=config.get("model.port", 8181),
+        host=config.get("model.host", "127.0.0.1")
+    )
+
+    if remote_ok:
         config.set_value("agent.use_remote", True, source="boot")
+        server_ready.set()
+    elif existing:
+        config.set_value("agent.use_remote", False, source="boot")
+        server_ready.set()
+    elif model_ready:
+        config.set_value("agent.use_remote", False, source="boot")
+        def _start_server():
+            s = serve.ModelServer()
+            s.start(quiet=True)
+            server_ready.set()
+        t = threading.Thread(target=_start_server, daemon=True)
+        t.start()
+    else:
+        server_ready.set()
+
+    # Play launch sequence while server loads (if needed)
+    _play_launch_sequence(server_ready)
 
     chat.blank()
-    chat.status_dot("Local model  (Qwen2.5-Coder-7B)", ok=model_ready)
     chat.status_dot(f"Remote ({remote_url.split('/')[2]})", ok=remote_ok)
+    chat.status_dot("Local model", ok=model_ready or existing)
+    if remote_ok:
+        chat.out(f"  {chat.DIM}using remote{chat.RESET}")
+    elif existing or model_ready:
+        chat.out(f"  {chat.DIM}using local (slow on CPU){chat.RESET}")
+    else:
+        chat.out(f"  {chat.BRIGHT_RED}no backend available{chat.RESET}")
     chat.blank()
 
     return remote_ok
@@ -275,10 +279,72 @@ def _show_status(agent):
 
 
 # ============================================================
+# Self-install — script bends the system to its will
+# ============================================================
+
+ALIAS_NAME = "moonunit2"
+
+def _self_install():
+    """Ensure the script is executable and aliased system-wide."""
+    script_path = Path(__file__).resolve()
+    changed = False
+
+    # Ensure executable
+    if not os.access(script_path, os.X_OK):
+        os.chmod(script_path, script_path.stat().st_mode | 0o755)
+        changed = True
+
+    # Determine best symlink location
+    user_bin = Path.home() / ".local" / "bin"
+    system_bin = Path("/usr/local/bin")
+
+    # Try user-local first (no sudo needed), then system
+    for bin_dir in [user_bin, system_bin]:
+        link = bin_dir / ALIAS_NAME
+        if link.is_symlink() or link.exists():
+            if link.is_symlink() and link.resolve() == script_path:
+                return  # Already correct
+            # Wrong target — fix it
+            try:
+                link.unlink()
+            except PermissionError:
+                continue
+        try:
+            bin_dir.mkdir(parents=True, exist_ok=True)
+            link.symlink_to(script_path)
+            # Ensure ~/.local/bin is in PATH
+            if bin_dir == user_bin:
+                _ensure_path(user_bin)
+            changed = True
+            break
+        except PermissionError:
+            continue
+
+    if changed:
+        chat.system_msg(f"Installed: {ALIAS_NAME}")
+
+
+def _ensure_path(bin_dir):
+    """Ensure bin_dir is in PATH via shell rc file."""
+    path_dirs = os.environ.get("PATH", "").split(":")
+    if str(bin_dir) in path_dirs:
+        return
+    # Add to bashrc/zshrc
+    for rc in [Path.home() / ".bashrc", Path.home() / ".zshrc"]:
+        if rc.exists():
+            content = rc.read_text()
+            export_line = f'export PATH="$HOME/.local/bin:$PATH"'
+            if export_line not in content and str(bin_dir) not in content:
+                with open(rc, "a") as f:
+                    f.write(f"\n# Added by {ALIAS_NAME}\n{export_line}\n")
+
+
+# ============================================================
 # Entry point
 # ============================================================
 
 def main():
+    _self_install()
     boot()
     agent = Agent()
     try:

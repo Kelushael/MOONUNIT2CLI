@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Comprehensive test suite for MOONUNIT1 CLI and agent framework.
-Run: python3 test_moonunit1.py
+Comprehensive test suite for MOONUNIT2 CLI and agent framework.
+Run: python3 test_moonunit2.py
 """
 
 import sys
@@ -190,7 +190,7 @@ def test_config_persistence():
     print("🧪 Testing config persistence...")
     from pathlib import Path
     
-    config_dir = Path.home() / ".moonunit1"
+    config_dir = Path.home() / ".moonunit2"
     assert config_dir.exists()
     print("  ✓ Config directory exists")
     

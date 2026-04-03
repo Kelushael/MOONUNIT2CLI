@@ -28,7 +28,7 @@ from collections import defaultdict
 from dataclasses import dataclass, asdict
 import statistics
 
-CONFIG_DIR = Path.home() / ".moonunit1"
+CONFIG_DIR = Path.home() / ".moonunit2"
 UX_DIR = CONFIG_DIR / "ux-behavior"
 BEHAVIOR_LOG = UX_DIR / "behavior.jsonl"
 PREFERENCES_FILE = UX_DIR / "user-preferences.json"

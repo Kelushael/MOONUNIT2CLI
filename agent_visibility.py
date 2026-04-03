@@ -22,7 +22,7 @@ from dataclasses import dataclass, asdict
 from collections import defaultdict
 
 # Paths
-CONFIG_DIR = Path.home() / ".moonunit1"
+CONFIG_DIR = Path.home() / ".moonunit2"
 VISIBILITY_LOG = CONFIG_DIR / "visibility.jsonl"
 METRICS_FILE = CONFIG_DIR / "metrics.json"
 

@@ -20,8 +20,8 @@ sudo apt update && sudo apt install -y python3 python3-pip git
 git clone https://github.com/Kelushael/MOONUNIT2CLI.git
 cd MOONUNIT2CLI
 pip3 install -r requirements.txt
-sudo ln -s $(pwd)/moonunit1cli.py /usr/local/bin/moonunit1
-sudo chmod +x moonunit1cli.py
+sudo ln -s $(pwd)/moonunit2cli.py /usr/local/bin/moonunit2
+sudo chmod +x moonunit2cli.py
 ```
 
 ### macOS
@@ -31,8 +31,8 @@ brew install python3 git
 git clone https://github.com/Kelushael/MOONUNIT2CLI.git
 cd MOONUNIT2CLI
 pip3 install -r requirements.txt
-sudo ln -s $(pwd)/moonunit1cli.py /usr/local/bin/moonunit1
-sudo chmod +x moonunit1cli.py
+sudo ln -s $(pwd)/moonunit2cli.py /usr/local/bin/moonunit2
+sudo chmod +x moonunit2cli.py
 ```
 
 ### Windows (WSL)
@@ -43,8 +43,8 @@ sudo apt update && sudo apt install -y python3 python3-pip git
 git clone https://github.com/Kelushael/MOONUNIT2CLI.git
 cd MOONUNIT2CLI
 pip3 install -r requirements.txt
-sudo ln -s $(pwd)/moonunit1cli.py /usr/local/bin/moonunit1
-sudo chmod +x moonunit1cli.py
+sudo ln -s $(pwd)/moonunit2cli.py /usr/local/bin/moonunit2
+sudo chmod +x moonunit2cli.py
 ```
 
 ### Termux (Android)
@@ -55,8 +55,8 @@ git clone https://github.com/Kelushael/MOONUNIT2CLI.git
 cd MOONUNIT2CLI
 pip install -r requirements.txt
 mkdir -p ~/.local/bin
-ln -s $(pwd)/moonunit1cli.py ~/.local/bin/moonunit1
-chmod +x moonunit1cli.py
+ln -s $(pwd)/moonunit2cli.py ~/.local/bin/moonunit2
+chmod +x moonunit2cli.py
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
 ```
 
@@ -67,8 +67,8 @@ sudo pacman -Sy python python-pip git
 git clone https://github.com/Kelushael/MOONUNIT2CLI.git
 cd MOONUNIT2CLI
 pip install -r requirements.txt
-sudo ln -s $(pwd)/moonunit1cli.py /usr/local/bin/moonunit1
-sudo chmod +x moonunit1cli.py
+sudo ln -s $(pwd)/moonunit2cli.py /usr/local/bin/moonunit2
+sudo chmod +x moonunit2cli.py
 ```
 
 ---
@@ -76,7 +76,7 @@ sudo chmod +x moonunit1cli.py
 ## Run
 
 ```bash
-moonunit1
+moonunit2
 ```
 
 That's it.

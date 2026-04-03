@@ -27,7 +27,7 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime
 
 # Paths
-CONFIG_DIR = Path.home() / ".moonunit1"
+CONFIG_DIR = Path.home() / ".moonunit2"
 TOOLS_DIR = CONFIG_DIR / "tools"
 TOOLKIT_MANIFEST = CONFIG_DIR / "toolkit-manifest.json"
 
