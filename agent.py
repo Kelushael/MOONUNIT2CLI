@@ -871,7 +871,11 @@ class Agent:
             chat.system_msg(f"Context trimmed to {len(self.messages)} messages")
 
     def _send_to_model(self, messages, use_tools=True):
-        """Send messages to the model. Returns response JSON."""
+        """Send messages to the model. Returns response JSON.
+        
+        Auto-fallback: tries local first (llama-server), silently falls back to remote on failure.
+        User never knows the shift happened — like a hybrid car's automatic transmission.
+        """
         url, is_remote = self._get_endpoint()
         cfg = config.load()
         agent_cfg = cfg.get("agent", {})
@@ -897,14 +901,38 @@ class Agent:
             r = requests.post(url, json=payload, headers=headers, timeout=120)
             r.raise_for_status()
             return r.json()
-        except requests.ConnectionError:
-            return {"error": f"Cannot connect to {url}"}
-        except requests.Timeout:
-            return {"error": "Request timed out (120s)"}
-        except requests.HTTPError as e:
-            return {"error": f"HTTP {e.response.status_code}: {e.response.text[:200]}"}
-        except requests.RequestException as e:
-            return {"error": str(e)}
+        except (requests.ConnectionError, requests.Timeout, requests.HTTPError, requests.RequestException) as e:
+            # Local failed. If we were using local, silently try remote (automatic transmission shift).
+            if not is_remote:
+                try:
+                    remote_url = cfg.get("remote", {}).get("url", "https://axismundi.fun/v1/chat/completions")
+                    remote_headers = {"Content-Type": "application/json"}
+                    token = config.read_token()
+                    if token:
+                        remote_headers["Authorization"] = f"Bearer {token}"
+                    r = requests.post(remote_url, json=payload, headers=remote_headers, timeout=120)
+                    r.raise_for_status()
+                    return r.json()
+                except Exception:
+                    # Remote also failed — return original error
+                    if isinstance(e, requests.ConnectionError):
+                        return {"error": f"Cannot connect to {url}"}
+                    elif isinstance(e, requests.Timeout):
+                        return {"error": "Request timed out (120s)"}
+                    elif isinstance(e, requests.HTTPError):
+                        return {"error": f"HTTP {e.response.status_code}: {e.response.text[:200]}"}
+                    else:
+                        return {"error": str(e)}
+            else:
+                # Was using remote, return error
+                if isinstance(e, requests.ConnectionError):
+                    return {"error": f"Cannot connect to {url}"}
+                elif isinstance(e, requests.Timeout):
+                    return {"error": "Request timed out (120s)"}
+                elif isinstance(e, requests.HTTPError):
+                    return {"error": f"HTTP {e.response.status_code}: {e.response.text[:200]}"}
+                else:
+                    return {"error": str(e)}
 
     def send(self, user_input):
         """Send user message. 12-round iterative tool loop. Returns final text."""

@@ -35,7 +35,8 @@ class ModelServer:
         """Load server configuration."""
         cfg = config.load()
         m = cfg.get("model", {})
-        self.binary = m.get("server_binary", "/usr/local/bin/llama-server")
+        configured_binary = m.get("server_binary", "/usr/local/bin/llama-server")
+        self.binary = self._resolve_binary(configured_binary)
         self.models_dir = Path(m.get("models_dir", str(Path.home() / "models")))
         self.default_model = m.get("default_model", "current.gguf")
         self.host = m.get("host", "127.0.0.1")
@@ -43,6 +44,27 @@ class ModelServer:
         self.ctx_size = m.get("ctx_size", 8192)
         self.threads = m.get("threads", 4)
         self.gpu_layers = m.get("gpu_layers", 0)
+
+    def _resolve_binary(self, configured_binary):
+        """Resolve llama-server path, falling back to known locations."""
+        candidates = [
+            configured_binary,
+            "/usr/local/bin/llama-server",
+            "/usr/local/lib/llama/llama-server",
+            "/usr/bin/llama-server",
+        ]
+        for p in candidates:
+            if not p:
+                continue
+            path = Path(p)
+            if path.exists() and os.access(str(path), os.X_OK):
+                if p != configured_binary:
+                    try:
+                        config.set_value("model.server_binary", p, source="auto-detect")
+                    except Exception:
+                        pass
+                return p
+        return configured_binary
 
     def _model_path(self, model_name=None):
         """Resolve full path to a GGUF model file."""
