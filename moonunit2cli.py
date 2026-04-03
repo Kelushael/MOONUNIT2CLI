@@ -8,6 +8,7 @@ Type the alias. It boots. You're in. That's it.
 import sys
 import os
 import time
+import signal
 import threading
 from pathlib import Path
 
@@ -127,10 +128,46 @@ def _ensure_model():
 # Boot
 # ============================================================
 
+def _kill_competing_servers(our_port):
+    """Kill every llama-server that isn't ours. Reclaim CPU and RAM."""
+    import subprocess as sp
+    try:
+        out = sp.check_output(["pgrep", "-a", "llama-server"], text=True, stderr=sp.DEVNULL)
+    except (sp.CalledProcessError, FileNotFoundError):
+        return
+    for line in out.strip().splitlines():
+        parts = line.split(None, 1)
+        if len(parts) < 2:
+            continue
+        pid = int(parts[0])
+        cmdline = parts[1]
+        # Skip if it's serving OUR port
+        if f"--port {our_port}" in cmdline:
+            continue
+        # Kill it — try normal first, then sudo
+        try:
+            os.kill(pid, signal.SIGTERM)
+            chat.system_msg(f"killed competing llama-server (PID {pid})")
+        except PermissionError:
+            try:
+                sp.run(["sudo", "-n", "kill", str(pid)], check=True,
+                       stdout=sp.DEVNULL, stderr=sp.DEVNULL)
+                chat.system_msg(f"killed root llama-server (PID {pid})")
+            except (sp.CalledProcessError, FileNotFoundError):
+                chat.system_msg(f"can't kill root PID {pid} — run: sudo kill {pid}")
+        except ProcessLookupError:
+            pass
+
+
 def boot():
     import requests
 
-    # Check remote first — it's faster than local on this hardware
+    our_port = config.get("model.port", 8181)
+
+    # Step 1: kill anything competing for CPU/RAM
+    _kill_competing_servers(our_port)
+
+    # Step 2: check remote
     remote_url = config.get("remote.url", "https://axismundi.fun/v1/chat/completions")
     try:
         r = requests.get(remote_url.replace("/v1/chat/completions", "/health"), timeout=5)
@@ -140,12 +177,10 @@ def boot():
 
     model_ready = _ensure_model()
 
-    # Remote preferred. Only start local server if remote is down.
+    # Step 3: ensure local server is running on our port
     server_ready = threading.Event()
-    existing = serve.find_existing_server(
-        port=config.get("model.port", 8181),
-        host=config.get("model.host", "127.0.0.1")
-    )
+    existing = serve.find_existing_server(port=our_port,
+                                          host=config.get("model.host", "127.0.0.1"))
 
     if remote_ok:
         config.set_value("agent.use_remote", True, source="boot")
@@ -164,8 +199,30 @@ def boot():
     else:
         server_ready.set()
 
-    # Play launch sequence while server loads (if needed)
     _play_launch_sequence(server_ready)
+
+    # Preload system prompt into KV cache while user reads the banner.
+    # First request is always slow (cold prefill). Do it now so chat is snappy.
+    if not remote_ok and (existing or model_ready):
+        config.set_value("agent.use_remote", False, source="boot")
+        def _warmup():
+            import requests as _req
+            host = config.get("model.host", "127.0.0.1")
+            port = config.get("model.port", 8181)
+            url = f"http://{host}:{port}/v1/chat/completions"
+            try:
+                _req.post(url, json={
+                    "messages": [
+                        {"role": "system", "content": "You are MOONUNIT, a sovereign AI agent. Be direct, precise, useful. You can help with code, files, commands, and planning."},
+                        {"role": "user", "content": "warmup"}
+                    ],
+                    "max_tokens": 1,
+                    "temperature": 0.0
+                }, timeout=120)
+            except Exception:
+                pass
+        warmup_thread = threading.Thread(target=_warmup, daemon=True)
+        warmup_thread.start()
 
     chat.blank()
     chat.status_dot(f"Remote ({remote_url.split('/')[2]})", ok=remote_ok)
@@ -173,7 +230,8 @@ def boot():
     if remote_ok:
         chat.out(f"  {chat.DIM}using remote{chat.RESET}")
     elif existing or model_ready:
-        chat.out(f"  {chat.DIM}using local (slow on CPU){chat.RESET}")
+        chat.out(f"  {chat.DIM}using local — streaming{chat.RESET}")
+        chat.out(f"  {chat.DIM}warming up prompt cache...{chat.RESET}")
     else:
         chat.out(f"  {chat.BRIGHT_RED}no backend available{chat.RESET}")
     chat.blank()
@@ -251,9 +309,6 @@ def chat_loop(agent):
 
         chat.blank()
         response = agent.send(user_input)
-        if response:
-            chat.blank()
-            chat.agent_msg(response)
         chat.blank()
 
 

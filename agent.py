@@ -803,45 +803,35 @@ class Agent:
         self._init_system_prompt()
 
     def _init_system_prompt(self):
-        """Load the sovereign identity + active context."""
-        identity_path = Path(__file__).parent / "identity.md"
-        if identity_path.exists():
-            system_prompt = identity_path.read_text()
+        """Load identity. Use lean prompt for local CPU, full prompt for remote."""
+        cfg = config.load()
+        use_remote = cfg.get("agent", {}).get("use_remote", False)
+
+        if use_remote:
+            # Remote model is fast — give it the full identity
+            identity_path = Path(__file__).parent / "identity.md"
+            if identity_path.exists():
+                system_prompt = identity_path.read_text()
+            else:
+                system_prompt = cfg.get("agent", {}).get("system_prompt",
+                    "You are a sovereign AI agent. Be direct and useful.")
+            pi = plat.platform_info()
+            system_prompt += f"\n\n[Platform: {pi['platform']} | Python {pi['python_version']} | Home: {pi['home']}]"
+            try:
+                ctx = context_engine.get_active_context()
+                if ctx["count"] > 0:
+                    system_prompt += f"\n\n[Active context: {ctx['count']} chunks, ~{ctx['total_tokens']} tokens, pressure {ctx['pressure']:.0%}]"
+            except Exception:
+                pass
+            try:
+                mc = mem.count()
+                if mc > 0:
+                    system_prompt += f"\n[Persistent memories: {mc}]"
+            except Exception:
+                pass
         else:
-            cfg = config.load()
-            system_prompt = cfg.get("agent", {}).get("system_prompt",
-                "You are a sovereign AI agent with tools to read/write files, "
-                "execute commands, manage config, SSH into servers, search memories, "
-                "and curate your own context. Be direct and useful."
-            )
-
-        # Inject platform info
-        pi = plat.platform_info()
-        system_prompt += f"\n\n[Platform: {pi['platform']} | Python {pi['python_version']} | Home: {pi['home']}]"
-
-        # Inject active context summary
-        try:
-            ctx = context_engine.get_active_context()
-            if ctx["count"] > 0:
-                system_prompt += f"\n\n[Active context: {ctx['count']} chunks, ~{ctx['total_tokens']} tokens, pressure {ctx['pressure']:.0%}]"
-        except Exception:
-            pass
-
-        # Inject memory count
-        try:
-            mc = mem.count()
-            if mc > 0:
-                system_prompt += f"\n[Persistent memories: {mc}]"
-        except Exception:
-            pass
-
-        # Inject dynamic tool count
-        try:
-            dt = tool_registry.list_dynamic_tools()
-            if dt:
-                system_prompt += f"\n[Dynamic tools: {len(dt)} ({', '.join(t['name'] for t in dt)})]"
-        except Exception:
-            pass
+            # Local CPU — every token costs ~1 second of prefill. Stay lean.
+            system_prompt = "You are MOONUNIT, a sovereign AI agent. Be direct, precise, useful. You can help with code, files, commands, and planning."
 
         self.messages = [{"role": "system", "content": system_prompt}]
 
@@ -870,69 +860,145 @@ class Agent:
             self.messages = [system] + kept
             chat.system_msg(f"Context trimmed to {len(self.messages)} messages")
 
+    def _build_endpoints(self):
+        """Build ordered fallback chain of endpoints."""
+        cfg = config.load()
+        remote_cfg = cfg.get("remote", {})
+        endpoints = []
+
+        primary_url, is_remote = self._get_endpoint()
+        endpoints.append((primary_url, is_remote, "primary"))
+
+        remote_url = remote_cfg.get("url", "https://axismundi.fun/v1/chat/completions")
+        if remote_url != primary_url:
+            endpoints.append((remote_url, True, "remote"))
+
+        fallback_url = remote_cfg.get("fallback_url")
+        if fallback_url and fallback_url not in (primary_url, remote_url):
+            endpoints.append((fallback_url, True, "fallback"))
+
+        return endpoints
+
     def _send_to_model(self, messages, use_tools=True):
-        """Send messages to the model. Returns response JSON.
-        
-        Auto-fallback: tries local first (llama-server), silently falls back to remote on failure.
-        User never knows the shift happened — like a hybrid car's automatic transmission.
+        """Send messages to the model. Streams tokens live so the user sees progress.
+
+        Fallback chain: primary -> remote -> fallback_url.
+        Returns a synthetic response dict matching OpenAI non-streaming format.
         """
-        url, is_remote = self._get_endpoint()
         cfg = config.load()
         agent_cfg = cfg.get("agent", {})
-
-        headers = {"Content-Type": "application/json"}
-        if is_remote:
-            token = config.read_token()
-            if token:
-                headers["Authorization"] = f"Bearer {token}"
 
         payload = {
             "messages": messages,
             "temperature": agent_cfg.get("temperature", 0.7),
             "max_tokens": agent_cfg.get("max_tokens", 2048),
-            "stream": False
+            "stream": True
         }
 
-        if use_tools and agent_cfg.get("tool_use", True):
+        endpoints = self._build_endpoints()
+        # Only send tool definitions to remote (big) models.
+        # Local models on CPU choke on the extra ~1400 tokens of tool schemas.
+        _, primary_is_remote = self._get_endpoint()
+        if use_tools and agent_cfg.get("tool_use", True) and primary_is_remote:
             payload["tools"] = self._get_tools()
             payload["tool_choice"] = "auto"
+        last_error = None
 
-        try:
-            r = requests.post(url, json=payload, headers=headers, timeout=120)
-            r.raise_for_status()
-            return r.json()
-        except (requests.ConnectionError, requests.Timeout, requests.HTTPError, requests.RequestException) as e:
-            # Local failed. If we were using local, silently try remote (automatic transmission shift).
-            if not is_remote:
+        for url, is_remote_ep, label in endpoints:
+            headers = {"Content-Type": "application/json"}
+            if is_remote_ep:
+                token = config.read_token()
+                if token:
+                    headers["Authorization"] = f"Bearer {token}"
+
+            try:
+                # Connect timeout 10s, read timeout 90s (per chunk).
+                # If the model is generating, chunks arrive every ~1s.
+                # If idle for 90s, something is stuck.
+                r = requests.post(url, json=payload, headers=headers, timeout=(10, 90), stream=True)
+                r.raise_for_status()
+            except requests.Timeout:
+                last_error = f"{label} timed out: {url.split('/')[2]}"
+                chat.system_msg(last_error)
+                continue
+            except requests.ConnectionError:
+                last_error = f"{label} unreachable: {url.split('/')[2]}"
+                chat.system_msg(last_error)
+                continue
+            except requests.HTTPError as e:
+                last_error = f"{label} HTTP {e.response.status_code}: {url.split('/')[2]}"
+                chat.system_msg(last_error)
+                continue
+            except requests.RequestException as e:
+                last_error = f"{label} error: {e}"
+                chat.system_msg(last_error)
+                continue
+
+            if label != "primary":
+                chat.system_msg(f"using {label}: {url.split('/')[2]}")
+
+            # Stream and reassemble
+            content = ""
+            tool_calls_acc = {}  # id -> {id, type, function: {name, arguments}}
+            finish_reason = None
+            streaming_text = False
+
+            for line in r.iter_lines(decode_unicode=True):
+                if not line or not line.startswith("data: "):
+                    continue
+                data = line[6:]
+                if data.strip() == "[DONE]":
+                    break
                 try:
-                    remote_url = cfg.get("remote", {}).get("url", "https://axismundi.fun/v1/chat/completions")
-                    remote_headers = {"Content-Type": "application/json"}
-                    token = config.read_token()
-                    if token:
-                        remote_headers["Authorization"] = f"Bearer {token}"
-                    r = requests.post(remote_url, json=payload, headers=remote_headers, timeout=120)
-                    r.raise_for_status()
-                    return r.json()
-                except Exception:
-                    # Remote also failed — return original error
-                    if isinstance(e, requests.ConnectionError):
-                        return {"error": f"Cannot connect to {url}"}
-                    elif isinstance(e, requests.Timeout):
-                        return {"error": "Request timed out (120s)"}
-                    elif isinstance(e, requests.HTTPError):
-                        return {"error": f"HTTP {e.response.status_code}: {e.response.text[:200]}"}
-                    else:
-                        return {"error": str(e)}
-            else:
-                # Was using remote, return error
-                if isinstance(e, requests.ConnectionError):
-                    return {"error": f"Cannot connect to {url}"}
-                elif isinstance(e, requests.Timeout):
-                    return {"error": "Request timed out (120s)"}
-                elif isinstance(e, requests.HTTPError):
-                    return {"error": f"HTTP {e.response.status_code}: {e.response.text[:200]}"}
-                else:
-                    return {"error": str(e)}
+                    chunk = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+
+                choices = chunk.get("choices", [])
+                if not choices:
+                    continue
+                delta = choices[0].get("delta", {})
+                finish_reason = choices[0].get("finish_reason") or finish_reason
+
+                # Stream text content live
+                text = delta.get("content", "")
+                if text:
+                    if not streaming_text:
+                        chat.agent_msg_start()
+                        streaming_text = True
+                    chat.stream_token(text)
+                    content += text
+
+                # Accumulate tool calls
+                for tc_delta in delta.get("tool_calls", []):
+                    idx = tc_delta.get("index", 0)
+                    if idx not in tool_calls_acc:
+                        tool_calls_acc[idx] = {
+                            "id": tc_delta.get("id", f"call_{idx}"),
+                            "type": "function",
+                            "function": {"name": "", "arguments": ""}
+                        }
+                    if "id" in tc_delta:
+                        tool_calls_acc[idx]["id"] = tc_delta["id"]
+                    func_delta = tc_delta.get("function", {})
+                    if "name" in func_delta:
+                        tool_calls_acc[idx]["function"]["name"] += func_delta["name"]
+                    if "arguments" in func_delta:
+                        tool_calls_acc[idx]["function"]["arguments"] += func_delta["arguments"]
+
+            if streaming_text:
+                chat.stream_end()
+
+            # Build response in non-streaming format
+            message = {"role": "assistant", "content": content}
+            if tool_calls_acc:
+                message["tool_calls"] = [tool_calls_acc[k] for k in sorted(tool_calls_acc)]
+
+            return {
+                "choices": [{"message": message, "finish_reason": finish_reason}]
+            }
+
+        return {"error": f"All backends failed. Last: {last_error}"}
 
     def send(self, user_input):
         """Send user message. 12-round iterative tool loop. Returns final text."""
